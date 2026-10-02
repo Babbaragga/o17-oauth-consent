@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Autorizar O17</title>
+<style>
+*{box-sizing:border-box}html,body{min-height:100%;margin:0}
+body{background:#0c0c0d;color:#eee;font:16px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}
+.card{width:min(520px,100%);background:#171719;border:1px solid #333;border-radius:18px;padding:28px;box-shadow:0 18px 60px #0008}
+h1{margin:0 0 8px;font-size:28px}.muted{color:#aaa;line-height:1.5}.box{background:#101012;border:1px solid #333;border-radius:12px;padding:14px;margin:18px 0}
+label{display:block;margin:14px 0 6px;color:#bbb}input{width:100%;padding:12px;border-radius:10px;border:1px solid #444;background:#0d0d0e;color:#fff;font-size:16px}
+.row{display:flex;gap:10px;margin-top:18px}.row>*{flex:1}button{padding:12px 16px;border:0;border-radius:10px;font-weight:700;cursor:pointer;font-size:15px}
+.primary{background:#f1f1f1;color:#111}.secondary{background:#29292c;color:#eee}.error{color:#ff9898;white-space:pre-wrap;margin-top:14px}.ok{color:#90e4a4}.hidden{display:none}
+.small{font-size:13px;color:#888;margin-top:18px}
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>O17</h1>
+  <div class="muted">Autorize o Claude a usar o perfil remoto restrito do O17 neste computador.</div>
+  <div id="status" class="box">Carregando…</div>
+  <section id="login" class="hidden">
+    <label for="email">E-mail</label>
+    <input id="email" readonly>
+    <label for="password">Senha O17</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <button id="signin" class="primary" style="width:100%;margin-top:16px">Entrar</button>
+  </section>
+  <section id="consent" class="hidden">
+    <div class="box">
+      <div><b>Aplicativo:</b> <span id="clientName">Claude</span></div>
+      <div style="margin-top:8px"><b>Permissões:</b> <span id="scopes">email</span></div>
+    </div>
+    <div class="muted">O Claude terá apenas as ferramentas do perfil remoto do O17. Shell bruto e ações destrutivas permanecem bloqueados.</div>
+    <div class="row">
+      <button id="deny" class="secondary">Negar</button>
+      <button id="approve" class="primary">Autorizar</button>
+    </div>
+  </section>
+  <div id="err" class="error"></div>
+  <div class="small">OAuth 2.1 + PKCE · O17 Remote MCP</div>
+</main>
+<script type="module">
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+const project = "https://qiuzoymtrubcukdlgqtu.supabase.co";
+const publishable = "sb_publishable_LdG7z1bFV6ej96APAvu6bg_PllOGli4";
+const expectedEmail = "gdellantonia@hotmail.com";
+const supabase = createClient(project, publishable, {
+  auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}
+});
+const qs = new URLSearchParams(location.search);
+const incoming = qs.get("authorization_id");
+if (incoming) sessionStorage.setItem("o17_authorization_id", incoming);
+const authorizationId = incoming || sessionStorage.getItem("o17_authorization_id");
+const statusEl=document.getElementById("status");
+const loginEl=document.getElementById("login");
+const consentEl=document.getElementById("consent");
+const errEl=document.getElementById("err");
+document.getElementById("email").value=expectedEmail;
+function showError(e){ errEl.textContent=String(e?.message||e||"Erro"); }
+async function render(){
+  errEl.textContent="";
+  if(!authorizationId){ statusEl.textContent="Pedido OAuth ausente ou expirado."; return; }
+  const {data:{session}}=await supabase.auth.getSession();
+  if(!session){
+    statusEl.textContent="Entre com a conta O17 para continuar.";
+    loginEl.classList.remove("hidden");
+    consentEl.classList.add("hidden");
+    return;
+  }
+  if((session.user?.email||"").toLowerCase()!==expectedEmail){
+    await supabase.auth.signOut();
+    statusEl.textContent="Conta incorreta.";
+    loginEl.classList.remove("hidden");
+    consentEl.classList.add("hidden");
+    return;
+  }
+  loginEl.classList.add("hidden");
+  const {data,error}=await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
+  if(error){ showError(error); statusEl.textContent="Não foi possível carregar a autorização."; return; }
+  if(data?.redirect_url && !data?.authorization_id){ location.replace(data.redirect_url); return; }
+  statusEl.innerHTML='<span class="ok">Autenticado como '+expectedEmail+'</span>';
+  document.getElementById("clientName").textContent=data?.client?.name||data?.client_name||data?.client_id||"Claude";
+  const scope=data?.scope||data?.scopes||"email";
+  document.getElementById("scopes").textContent=Array.isArray(scope)?scope.join(", "):String(scope);
+  consentEl.classList.remove("hidden");
+}
+document.getElementById("signin").onclick=async()=>{
+  try{
+    const password=document.getElementById("password").value;
+    const {error}=await supabase.auth.signInWithPassword({email:expectedEmail,password});
+    if(error) throw error;
+    await render();
+  }catch(e){showError(e)}
+};
+document.getElementById("approve").onclick=async()=>{
+  try{
+    const {data,error}=await supabase.auth.oauth.approveAuthorization(authorizationId);
+    if(error) throw error;
+    sessionStorage.removeItem("o17_authorization_id");
+    location.replace(data.redirect_url);
+  }catch(e){showError(e)}
+};
+document.getElementById("deny").onclick=async()=>{
+  try{
+    const {data,error}=await supabase.auth.oauth.denyAuthorization(authorizationId);
+    if(error) throw error;
+    sessionStorage.removeItem("o17_authorization_id");
+    location.replace(data.redirect_url);
+  }catch(e){showError(e)}
+};
+await render();
+</script>
+</body>
+</html>
